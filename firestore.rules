@@ -1,0 +1,104 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return signedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function isPublishedOpportunity(opportunityId) {
+      let opportunityPath = /databases/$(database)/documents/jobs/$(opportunityId);
+      return exists(opportunityPath) &&
+        get(opportunityPath).data.published == true &&
+        (!('status' in get(opportunityPath).data) || get(opportunityPath).data.status == 'Open');
+    }
+
+    match /users/{userId} {
+      allow create: if (
+        isOwner(userId) &&
+        request.resource.data.uid == userId &&
+        request.resource.data.role == 'student'
+      ) || (
+        isAdmin() &&
+        request.resource.data.uid == userId &&
+        request.resource.data.role in ['student', 'admin']
+      );
+      allow read: if signedIn() && (isOwner(userId) || isAdmin());
+      allow update: if isAdmin() || (
+        isOwner(userId) &&
+        request.resource.data.uid == resource.data.uid &&
+        request.resource.data.role == resource.data.role
+      );
+      allow delete: if isOwner(userId) || isAdmin();
+    }
+
+    match /students/{studentId} {
+      allow create: if isOwner(studentId);
+      allow read: if signedIn() && (isOwner(studentId) || isAdmin());
+      allow update: if isOwner(studentId) || isAdmin();
+      allow delete: if isAdmin();
+
+      match /atsAnalyses/{analysisId} {
+        allow create: if isOwner(studentId);
+        allow read: if signedIn() && isOwner(studentId);
+        allow update, delete: if isOwner(studentId);
+      }
+    }
+
+    match /jobs/{jobId} {
+      allow read: if signedIn() && (isAdmin() || resource.data.published == true);
+      allow create: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /applications/{applicationId} {
+      allow create: if signedIn() &&
+        request.resource.data.studentId == request.auth.uid &&
+        request.resource.data.opportunityId is string &&
+        request.resource.data.jobId == request.resource.data.opportunityId &&
+        isPublishedOpportunity(request.resource.data.opportunityId) &&
+        applicationId == request.auth.uid + '_' + request.resource.data.opportunityId;
+      allow read: if signedIn() && (
+        resource.data.studentId == request.auth.uid ||
+        isAdmin()
+      );
+      allow update: if isAdmin() || (
+        signedIn() &&
+        resource.data.studentId == request.auth.uid &&
+        request.resource.data.studentId == resource.data.studentId &&
+        request.resource.data.status == resource.data.status
+      );
+      allow delete: if isAdmin();
+    }
+
+    match /notifications/{notificationId} {
+      allow create: if signedIn();
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+      allow update: if signedIn() && resource.data.userId == request.auth.uid;
+      allow delete: if isAdmin();
+    }
+
+    match /aiAnalyses/{analysisId} {
+      allow create: if signedIn();
+      allow read: if signedIn() && (
+        resource.data.studentId == request.auth.uid ||
+        isAdmin()
+      );
+      allow update, delete: if isAdmin();
+    }
+
+    match /announcements/{announcementId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin();
+    }
+  }
+}
